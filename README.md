@@ -57,6 +57,11 @@ Several initial strategies for the recommendation engine were attempted:
 These challenges led to the final **hybrid CLIP + LLM architecture**, which proved robust, computationally feasible, and effective at overcoming the dataset's limitations.
 
 ---
+### UI & Dependencies
+
+An interactive web application built with **Streamlit** demonstrates the system's capabilities.The frontend provides a chat-based interface where users can receive recommendations, view a detailed analysis from the AI, and browse a clothing catalog.
+
+---
 
 ## Technical Challenges and Innovations
 
