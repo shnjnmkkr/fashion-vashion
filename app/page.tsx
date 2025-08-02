@@ -129,21 +129,45 @@ export default function FashionVashion() {
     const item = clothingItems.find(item => item.id === itemId)
     if (!item) return
 
+    console.log('Toggle favorite clicked for item:', itemId)
+    console.log('Current favorites:', favorites)
+
     if (favorites.includes(itemId)) {
+      console.log('Removing from favorites:', itemId)
       await removeFromFavorites(itemId)
+      setFavorites(prev => prev.filter(id => id !== itemId))
     } else {
+      console.log('Adding to favorites:', itemId)
       await addToFavorites(itemId, item.name, item.clothImage, item.personImage)
+      setFavorites(prev => [...prev, itemId])
     }
+    
+    console.log('Updated favorites:', favorites)
   }
 
   const toggleRecommender = async (itemId: string) => {
     const item = clothingItems.find(item => item.id === itemId)
     if (!item) return
 
+    console.log('Toggle recommender clicked for item:', itemId)
+    console.log('Current recommender items:', recommenderItems)
+
     if (recommenderItems.includes(itemId)) {
+      console.log('Removing from recommender:', itemId)
       await removeFromRecommender(itemId)
+      setRecommenderItems(prev => {
+        const updated = prev.filter(id => id !== itemId)
+        console.log('Updated recommender items (remove):', updated)
+        return updated
+      })
     } else {
+      console.log('Adding to recommender:', itemId)
       await addToRecommender(itemId, item.name, item.clothImage, item.personImage)
+      setRecommenderItems(prev => {
+        const updated = [...prev, itemId]
+        console.log('Updated recommender items (add):', updated)
+        return updated
+      })
     }
   }
 
@@ -161,6 +185,45 @@ export default function FashionVashion() {
   }
 
   const simulateThinkingSteps = async (userMessage: string) => {
+    // Check if this is a simple greeting or conversation starter
+    const isGreeting = /^(hi|hello|hey|greetings|good morning|good afternoon|good evening)$/i.test(userMessage.trim())
+    
+    if (isGreeting) {
+      // Add thinking message briefly
+      setChatMessages(prev => [...prev, {
+        type: 'thinking',
+        message: 'Processing...',
+        thinkingSteps: []
+      }])
+
+      // Simulate brief processing
+      setTimeout(() => {
+        setChatMessages(prev => {
+          const newMessages = [...prev]
+          const lastMessage = newMessages[newMessages.length - 1]
+          if (lastMessage.type === 'thinking') {
+            newMessages[newMessages.length - 1] = {
+              type: 'bot',
+              message: `Hello! 👋 I'm your AI Fashion Assistant. I can help you find the perfect clothing recommendations based on your style preferences, uploaded images, or items you've selected from our catalog.
+
+Here's what I can do for you:
+• Analyze your uploaded photos and suggest similar styles
+• Recommend outfits based on your descriptions
+• Show you items similar to ones you've added to the recommender
+• Provide styling tips and fashion advice
+
+Just tell me what you're looking for or upload some images to get started!`,
+              recommendations: [],
+              llmAnalysis: null,
+              geminiAnalysis: null
+            }
+          }
+          return newMessages
+        })
+      }, 1000)
+      return
+    }
+
     // Add thinking message to chat
     setChatMessages(prev => [...prev, {
       type: 'thinking',
@@ -190,7 +253,18 @@ export default function FashionVashion() {
     try {
       const formData = new FormData()
       formData.append('user_prompt', userMessage)
-      formData.append('catalog_items', JSON.stringify(recommenderItems))
+      
+      // Convert recommender item IDs to catalog filenames
+      const catalogItems = recommenderItems.map(itemId => {
+        const item = clothingItems.find(item => item.id === itemId)
+        if (item) {
+          // Extract filename from clothImage path
+          return item.clothImage.split('/').pop()
+        }
+        return null
+      }).filter(Boolean)
+      
+      formData.append('catalog_items', JSON.stringify(catalogItems))
       formData.append('top_k', '5')
 
       // Add uploaded images
@@ -206,22 +280,49 @@ export default function FashionVashion() {
       if (response.ok) {
         const data = await response.json()
         
+        // Create a conversational response
+        let botMessage = ''
+        if (data.recommendations && data.recommendations.length > 0) {
+          botMessage = `I found ${data.recommendations.length} great options for you! Here are my top recommendations based on your request: "${userMessage}"`
+        } else {
+          botMessage = `I understand you're looking for "${userMessage}". While I couldn't find exact matches, here are some general recommendations that might interest you:`
+        }
+
+        // Add Gemini analysis as part of the conversation
+        if (data.gemini_analysis && data.gemini_analysis.analysis) {
+          try {
+            const geminiData = typeof data.gemini_analysis.analysis === 'string' 
+              ? JSON.parse(data.gemini_analysis.analysis) 
+              : data.gemini_analysis.analysis
+            
+            if (geminiData.compatibility) {
+              botMessage += `\n\n💡 **My Analysis:** ${geminiData.compatibility}`
+            }
+            if (geminiData.catalog_feedback) {
+              botMessage += `\n\n📋 **Catalog Feedback:** ${geminiData.catalog_feedback}`
+            }
+          } catch (e) {
+            // If parsing fails, add raw analysis
+            botMessage += `\n\n💡 **My Analysis:** ${data.gemini_analysis.analysis}`
+          }
+        }
+        
         // Replace thinking message with actual response
         setChatMessages(prev => {
           const newMessages = [...prev]
           const lastMessage = newMessages[newMessages.length - 1]
           if (lastMessage.type === 'thinking') {
-            const botMessage: ChatMessage = {
+            const botResponse: ChatMessage = {
               type: 'bot',
-              message: `Based on your request "${userMessage}", here are my recommendations:`,
+              message: botMessage,
               recommendations: data.recommendations || [],
               llmAnalysis: data.llm_analysis,
               geminiAnalysis: data.gemini_analysis
             }
-            newMessages[newMessages.length - 1] = botMessage
+            newMessages[newMessages.length - 1] = botResponse
             
             // Save bot message to database
-            saveChatMessage('bot', botMessage.message, botMessage.recommendations, botMessage.llmAnalysis, botMessage.geminiAnalysis)
+            saveChatMessage('bot', botResponse.message, botResponse.recommendations, botResponse.llmAnalysis, botResponse.geminiAnalysis)
           }
           return newMessages
         })
@@ -268,7 +369,29 @@ export default function FashionVashion() {
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
+    console.log('Image upload triggered:', files.length, 'files')
     setUploadedImages(prev => [...prev, ...files])
+  }
+
+  const [isDragOver, setIsDragOver] = useState(false)
+
+  const handleDragOver = (event: React.DragEvent) => {
+    event.preventDefault()
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = (event: React.DragEvent) => {
+    event.preventDefault()
+    setIsDragOver(false)
+  }
+
+  const handleDrop = (event: React.DragEvent) => {
+    event.preventDefault()
+    setIsDragOver(false)
+    const files = Array.from(event.dataTransfer.files)
+    const imageFiles = files.filter(file => file.type.startsWith('image/'))
+    console.log('Drag and drop triggered:', imageFiles.length, 'image files')
+    setUploadedImages(prev => [...prev, ...imageFiles])
   }
 
   const removeUploadedImage = (index: number) => {
@@ -358,7 +481,8 @@ export default function FashionVashion() {
       })
       
       if (response.ok) {
-        setFavorites(prev => [...prev, itemId])
+        // State is already updated in toggleFavorite
+        console.log('Successfully added to favorites:', itemId)
       }
     } catch (error) {
       console.error('Error adding to favorites:', error)
@@ -379,7 +503,8 @@ export default function FashionVashion() {
       })
       
       if (response.ok) {
-        setFavorites(prev => prev.filter(id => id !== itemId))
+        // State is already updated in toggleFavorite
+        console.log('Successfully removed from favorites:', itemId)
       }
     } catch (error) {
       console.error('Error removing from favorites:', error)
@@ -407,7 +532,8 @@ export default function FashionVashion() {
       })
       
       if (response.ok) {
-        setRecommenderItems(prev => [...prev, itemId])
+        // State is already updated in toggleRecommender
+        console.log('Successfully added to recommender:', itemId)
       }
     } catch (error) {
       console.error('Error adding to recommender:', error)
@@ -428,7 +554,8 @@ export default function FashionVashion() {
       })
       
       if (response.ok) {
-        setRecommenderItems(prev => prev.filter(id => id !== itemId))
+        // State is already updated in toggleRecommender
+        console.log('Successfully removed from recommender:', itemId)
       }
     } catch (error) {
       console.error('Error removing from recommender:', error)
@@ -502,15 +629,18 @@ export default function FashionVashion() {
               <h1 className="text-3xl font-bold text-white">Fashion-Vashion</h1>
             </div>
             <div className="flex items-center space-x-4">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                className="border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white"
-                onClick={() => setFavoritesOpen(true)}
-              >
-                <Heart className="w-4 h-4 mr-2" />
-                Favorites ({favorites.length})
-              </Button>
+                             <Button 
+                 variant="outline" 
+                 size="sm" 
+                 className="border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white"
+                 onClick={() => {
+                   console.log('Favorites button clicked, favorites:', favorites)
+                   setFavoritesOpen(true)
+                 }}
+               >
+                 <Heart className="w-4 h-4 mr-2" />
+                 Favorites ({favorites.length})
+               </Button>
               <Button 
                 variant="outline" 
                 size="sm" 
@@ -560,31 +690,36 @@ export default function FashionVashion() {
                   </CardHeader>
                   <CardFooter className="pt-0 pb-4">
                     <div className="flex gap-3 w-full items-center justify-center">
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="flex-1 border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white text-sm h-10 px-3"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          toggleRecommender(item.id)
-                        }}
-                      >
-                        <Plus className="w-4 h-4 mr-2" />
-                        {recommenderItems.includes(item.id) ? 'Remove' : 'Add to Recommender'}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="w-10 h-10 border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white px-0"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          toggleFavorite(item.id)
-                        }}
-                      >
-                        <Heart 
-                          className={`w-4 h-4 ${favorites.includes(item.id) ? 'fill-red-500 text-red-500' : ''}`} 
-                        />
-                      </Button>
+                                             <Button 
+                         variant="outline" 
+                         size="sm" 
+                         className={`flex-1 text-sm h-10 px-3 ${
+                           recommenderItems.includes(item.id) 
+                             ? 'border-red-500 text-red-600 bg-red-50 hover:bg-red-100' 
+                             : 'border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white'
+                         }`}
+                         onClick={(e) => {
+                           e.stopPropagation()
+                           toggleRecommender(item.id)
+                         }}
+                       >
+                         <Plus className="w-4 h-4 mr-2" />
+                         {recommenderItems.includes(item.id) ? 'Remove from Recommender' : 'Add to Recommender'}
+                       </Button>
+                                             <Button
+                         size="sm"
+                         variant="outline"
+                         className="w-10 h-10 border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white px-0"
+                         onClick={(e) => {
+                           e.stopPropagation()
+                           console.log('Heart button clicked for item:', item.id)
+                           toggleFavorite(item.id)
+                         }}
+                       >
+                         <Heart 
+                           className={`w-4 h-4 ${favorites.includes(item.id) ? 'fill-red-500 text-red-500' : ''}`} 
+                         />
+                       </Button>
                     </div>
                   </CardFooter>
                 </Card>
@@ -702,22 +837,29 @@ export default function FashionVashion() {
                   {/* Removed category display */}
                 </div>
                 <div className="flex space-x-2">
-                  <Button
-                    variant="outline"
-                    className="border-purple-500 text-purple-300 hover:bg-purple-500 hover:text-white"
-                    onClick={() => toggleFavorite(selectedItem.id)}
-                  >
-                    <Heart className={`w-4 h-4 mr-2 ${favorites.includes(selectedItem.id) ? 'fill-red-500 text-red-500' : ''}`} />
-                    {favorites.includes(selectedItem.id) ? 'Remove from Favorites' : 'Add to Favorites'}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white"
-                    onClick={() => toggleRecommender(selectedItem.id)}
-                  >
-                    <Plus className="w-4 h-4 mr-2" />
-                    {recommenderItems.includes(selectedItem.id) ? 'Remove from Recommender' : 'Add to Recommender'}
-                  </Button>
+                                     <Button
+                     variant="outline"
+                     className="border-purple-500 text-purple-300 hover:bg-purple-500 hover:text-white"
+                     onClick={() => {
+                       console.log('Detail dialog heart button clicked for item:', selectedItem.id)
+                       toggleFavorite(selectedItem.id)
+                     }}
+                   >
+                     <Heart className={`w-4 h-4 mr-2 ${favorites.includes(selectedItem.id) ? 'fill-red-500 text-red-500' : ''}`} />
+                     {favorites.includes(selectedItem.id) ? 'Remove from Favorites' : 'Add to Favorites'}
+                   </Button>
+                                     <Button
+                     variant="outline"
+                     className={`${
+                       recommenderItems.includes(selectedItem.id) 
+                         ? 'border-red-500 text-red-600 bg-red-50 hover:bg-red-100' 
+                         : 'border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white'
+                     }`}
+                     onClick={() => toggleRecommender(selectedItem.id)}
+                   >
+                     <Plus className="w-4 h-4 mr-2" />
+                     {recommenderItems.includes(selectedItem.id) ? 'Remove from Recommender' : 'Add to Recommender'}
+                   </Button>
                 </div>
               </div>
             </>
@@ -727,8 +869,8 @@ export default function FashionVashion() {
 
       {/* Enhanced Chatbot Dialog */}
       <Dialog open={chatbotOpen} onOpenChange={setChatbotOpen}>
-        <DialogContent className="max-w-5xl h-[800px] bg-black/90 backdrop-blur-sm border-purple-500/20">
-          <DialogHeader>
+        <DialogContent className="max-w-5xl max-h-[90vh] bg-black/90 backdrop-blur-sm border-purple-500/20 flex flex-col">
+          <DialogHeader className="flex-shrink-0">
             <DialogTitle className="text-white flex items-center justify-between">
               <span className="flex items-center">
                 <Brain className="w-5 h-5 mr-2" />
@@ -745,11 +887,25 @@ export default function FashionVashion() {
             </DialogTitle>
           </DialogHeader>
           
-          <div className="flex flex-col h-full">
-            {/* Chat Messages */}
-            <div className="flex-1 overflow-y-auto space-y-4 mb-4 p-4 bg-black/20 rounded-lg">
-              {chatMessages.length === 0 ? (
-                <div className="text-center text-purple-300">
+          <div className="flex flex-col flex-1 min-h-0">
+                         {/* Chat Messages */}
+             <div 
+               className={`flex-1 overflow-y-auto space-y-4 mb-4 p-4 rounded-lg transition-colors ${
+                 isDragOver 
+                   ? 'bg-purple-900/40 border-2 border-dashed border-purple-400' 
+                   : 'bg-black/20'
+               }`}
+               onDragOver={handleDragOver}
+               onDragLeave={handleDragLeave}
+               onDrop={handleDrop}
+             >
+                             {chatMessages.length === 0 ? (
+                 <div className="text-center text-purple-300">
+                   {isDragOver && (
+                     <div className="mb-4 p-4 bg-purple-500/20 rounded-lg border border-purple-400">
+                       <p className="text-purple-200">Drop images here to upload!</p>
+                     </div>
+                   )}
                   <Brain className="w-12 h-12 mx-auto mb-2 opacity-50" />
                   <p>Ask me about fashion recommendations!</p>
                   <p className="text-sm opacity-70 mt-1">I'll show you my thinking process step by step</p>
@@ -821,119 +977,75 @@ export default function FashionVashion() {
                             <div className="space-y-3">
                               <p className="text-sm font-semibold text-purple-300">Top Recommendations:</p>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-60 overflow-y-auto">
-                                {msg.recommendations.map((rec, i) => (
-                                  <div key={rec.filename || i} className="flex items-center space-x-3 p-3 bg-black/30 rounded-lg border border-purple-500/20">
-                                    <div className="w-16 h-16 flex items-center justify-center">
-                                      <img 
-                                        src={`http://localhost:8000/api/catalog/${rec.filename}`} 
-                                        alt={rec.filename} 
-                                        className="w-auto h-full object-contain"
-                                      />
+                                                                 {msg.recommendations.map((rec, i) => {
+                                   // Find the corresponding clothing item by filename
+                                   const clothingItem = clothingItems.find(item => {
+                                     // Extract filename from the item's clothImage path
+                                     const itemFilename = item.clothImage.split('/').pop()
+                                     return itemFilename === rec.filename
+                                   })
+                                   
+                                   return (
+                                     <div 
+                                       key={rec.filename || i} 
+                                       className="flex items-center space-x-3 p-3 bg-black/30 rounded-lg border border-purple-500/20 hover:bg-black/50 cursor-pointer transition-colors"
+                                                                               onClick={() => {
+                                          console.log('Recommendation clicked:', rec.filename)
+                                          if (clothingItem) {
+                                            console.log('Found clothing item:', clothingItem.name)
+                                            setSelectedItem(clothingItem)
+                                            setChatbotOpen(false) // Close chatbot when opening detail
+                                          } else {
+                                            console.log('Clothing item not found for filename:', rec.filename)
+                                          }
+                                        }}
+                                     >
+                                                                             <div className="w-16 h-16 flex items-center justify-center">
+                                         <img 
+                                           src={`/api/clothes/${rec.filename}`} 
+                                           alt={rec.filename} 
+                                           className="w-auto h-full object-contain"
+                                         />
+                                       </div>
+                                                                             <div className="flex-1 min-w-0">
+                                         <p className="text-sm font-medium truncate">{rec.filename}</p>
+                                         <p className="text-xs text-gray-400">
+                                           Rank: #{rec.rank || i + 1}
+                                         </p>
+                                         <p className="text-xs text-blue-300 mt-1">Click to view details</p>
+                                       </div>
                                     </div>
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-sm font-medium truncate">{rec.filename}</p>
-                                      <p className="text-xs text-purple-300">
-                                        Match: {((rec.similarity_score || 0) * 100).toFixed(0)}%
-                                      </p>
-                                      <p className="text-xs text-gray-400">
-                                        Rank: #{rec.rank || i + 1}
-                                      </p>
-                                    </div>
-                                  </div>
-                                ))}
+                                  )
+                                })}
                               </div>
                             </div>
                           )}
                           
-                          {msg.llmAnalysis && (
-                            <div className="mt-3 p-3 bg-purple-900/20 rounded-lg border border-purple-500/20">
-                              <p className="text-sm font-semibold text-purple-300 mb-2">LLM Analysis:</p>
-                              <div className="text-xs text-gray-300 space-y-1">
-                                {typeof msg.llmAnalysis === 'object' ? (
-                                  <div>
-                                    <p><strong>Strategy:</strong> {msg.llmAnalysis.search_strategy}</p>
-                                    <p><strong>Intent:</strong> {msg.llmAnalysis.user_intent}</p>
-                                    <p><strong>Confidence:</strong> {msg.llmAnalysis.confidence}</p>
-                                  </div>
-                                ) : (
-                                  <p>{msg.llmAnalysis}</p>
-                                )}
-                              </div>
-                            </div>
-                          )}
                           
-                          {msg.geminiAnalysis && (
-                            <div className="mt-3 p-3 bg-blue-900/20 rounded-lg border border-blue-500/20">
-                              <p className="text-sm font-semibold text-blue-300 mb-2">Gemini Analysis:</p>
-                              <div className="text-xs text-gray-300">
-                                {typeof msg.geminiAnalysis === 'object' ? (
-                                  <div>
-                                    {msg.geminiAnalysis.analysis && (
-                                      <p><strong>Analysis:</strong> {JSON.stringify(msg.geminiAnalysis.analysis)}</p>
-                                    )}
-                                    {msg.geminiAnalysis.styling_tips && (
-                                      <div>
-                                        <p><strong>Styling Tips:</strong></p>
-                                        <ul className="list-disc list-inside ml-2">
-                                          {msg.geminiAnalysis.styling_tips.map((tip: string, i: number) => (
-                                            <li key={i}>{tip}</li>
-                                          ))}
-                                        </ul>
-                                      </div>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <p>{msg.geminiAnalysis}</p>
-                                )}
-                              </div>
-                            </div>
-                          )}
+                          
+
                         </div>
                       </div>
                     )}
                     
-                    {/* Thinking Process */}
-                    {msg.type === 'thinking' && msg.thinkingSteps && (
-                      <div className="flex justify-start">
-                        <div className="max-w-2xl px-4 py-3 rounded-lg bg-gradient-to-r from-purple-900/50 to-blue-900/50 text-white border border-purple-500/20">
-                          <div className="flex items-center mb-3">
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            <span className="text-sm font-medium">AI Thinking Process</span>
-                          </div>
-                          <div className="space-y-2">
-                            {msg.thinkingSteps.map((step, stepIndex) => (
-                              <div key={stepIndex} className="flex items-start space-x-2">
-                                <div className={`mt-1 ${getStepColor(step.status)}`}>
-                                  {step.status === 'processing' ? (
-                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                  ) : step.status === 'completed' ? (
-                                    <div className="w-3 h-3 bg-green-400 rounded-full" />
-                                  ) : (
-                                    <div className="w-3 h-3 bg-gray-400 rounded-full" />
-                                  )}
-                                </div>
-                                <div className="flex-1">
-                                  <div className="flex items-center space-x-2">
-                                    {getStepIcon(step.type)}
-                                    <span className={`text-sm font-medium ${getStepColor(step.status)}`}>
-                                      {step.title}
-                                    </span>
-                                  </div>
-                                  <p className="text-xs text-gray-300 mt-1">{step.content}</p>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                                         {/* Thinking Process */}
+                     {msg.type === 'thinking' && (
+                       <div className="flex justify-start">
+                         <div className="max-w-2xl px-4 py-3 rounded-lg bg-gradient-to-r from-purple-900/50 to-blue-900/50 text-white border border-purple-500/20">
+                           <div className="flex items-center">
+                             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                             <span className="text-sm font-medium">Retrieving...</span>
+                           </div>
+                         </div>
+                       </div>
+                     )}
                   </div>
                 ))
               )}
             </div>
             
             {/* Input Area */}
-            <div className="flex space-x-2">
+            <div className="flex space-x-2 flex-shrink-0">
               <input
                 type="text"
                 value={userInput}
@@ -953,11 +1065,13 @@ export default function FashionVashion() {
                   onChange={handleImageUpload}
                   className="hidden"
                   disabled={isProcessing}
+                  id="image-upload"
                 />
                 <Button
                   variant="outline"
                   className="border-purple-500 text-purple-300 hover:bg-purple-500 hover:text-white"
                   disabled={isProcessing}
+                  onClick={() => document.getElementById('image-upload')?.click()}
                 >
                   📷
                 </Button>
@@ -1041,31 +1155,36 @@ export default function FashionVashion() {
                       </CardHeader>
                       <CardFooter className="pt-0 pb-3">
                         <div className="flex gap-2 w-full items-center justify-center">
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            className="flex-1 border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white text-xs h-8 px-2"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              toggleRecommender(item.id)
-                            }}
-                          >
-                            <Plus className="w-3 h-3 mr-1" />
-                            {recommenderItems.includes(item.id) ? 'Remove' : 'Add to Recommender'}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="w-8 h-8 border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white px-0"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              toggleFavorite(item.id)
-                            }}
-                          >
-                            <Heart 
-                              className={`w-3 h-3 fill-red-500 text-red-500`} 
-                            />
-                          </Button>
+                                                     <Button 
+                             variant="outline" 
+                             size="sm" 
+                             className={`flex-1 text-xs h-8 px-2 ${
+                               recommenderItems.includes(item.id) 
+                                 ? 'border-red-500 text-red-600 bg-red-50 hover:bg-red-100' 
+                                 : 'border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white'
+                             }`}
+                             onClick={(e) => {
+                               e.stopPropagation()
+                               toggleRecommender(item.id)
+                             }}
+                           >
+                             <Plus className="w-3 h-3 mr-1" />
+                             {recommenderItems.includes(item.id) ? 'Remove' : 'Add to Recommender'}
+                           </Button>
+                                                     <Button
+                             size="sm"
+                             variant="outline"
+                             className="w-8 h-8 border-purple-500 text-black bg-white hover:bg-purple-500 hover:text-white px-0"
+                             onClick={(e) => {
+                               e.stopPropagation()
+                               console.log('Favorites dialog heart button clicked for item:', item.id)
+                               toggleFavorite(item.id)
+                             }}
+                           >
+                             <Heart 
+                               className={`w-3 h-3 fill-red-500 text-red-500`} 
+                             />
+                           </Button>
                         </div>
                       </CardFooter>
                     </Card>

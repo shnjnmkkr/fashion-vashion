@@ -169,11 +169,26 @@ def build_catalog_index():
 
 def analyze_user_intent_and_guide_search(user_images: List[str], user_prompt: str) -> dict:
     """
-    LLM analyzes user intent, extracts attributes, and generates CLIP search terms.
-    Now supports multiple images.
+    LLM analyzes user intent and decides whether to search or respond conversationally.
     """
     try:
         model = genai.GenerativeModel('gemini-2.5-flash')
+        
+        # Check if this is a conversational request (greeting, question, etc.)
+        conversational_keywords = ['hi', 'hello', 'hey', 'greetings', 'good morning', 'good afternoon', 'good evening', 'help', 'what can you do', 'how does this work']
+        is_conversational = any(keyword in user_prompt.lower() for keyword in conversational_keywords)
+        
+        if is_conversational:
+            print("   🗣️ Detected conversational request - no search needed")
+            return {
+                "search_strategy": "conversational",
+                "clip_search_terms": [],
+                "user_intent": "conversation",
+                "style_analysis": "User is asking conversational questions",
+                "confidence": "high",
+                "should_search": False,
+                "response_type": "greeting" if any(greeting in user_prompt.lower() for greeting in ['hi', 'hello', 'hey']) else "help"
+            }
         
         # Load all user images
         user_image_objects = []
@@ -185,44 +200,85 @@ def analyze_user_intent_and_guide_search(user_images: List[str], user_prompt: st
                 print(f"   ❌ Error loading image {image_path}: {e}")
         
         if not user_image_objects:
-            print("   ⚠️ No valid images loaded, using fallback")
-            return {
-                "search_strategy": "similar",
-                "clip_search_terms": ["clothing"],
-                "user_intent": "casual",
-                "style_analysis": "No valid images provided",
-                "confidence": "low"
-            }
+            print("   ⚠️ No valid images loaded, using text-only analysis")
+            # Analyze text-only request
+            prompt = f"""
+            You are an AI fashion stylist. Analyze the user's request to determine if they want recommendations or just conversation.
 
+            USER REQUEST: "{user_prompt}"
+
+            Determine if this request:
+            1. Asks for specific clothing recommendations
+            2. Asks for styling advice
+            3. Is just a greeting or conversational
+            4. Asks about the system's capabilities
+
+            Respond in this JSON:
+            {{
+                "search_strategy": "text_only|conversational|specific_search",
+                "clip_search_terms": ["term1", "term2", "term3"],
+                "user_intent": "casual|formal|trendy|conversation|help",
+                "style_analysis": "Analysis of the request",
+                "confidence": "high|medium|low",
+                "should_search": true/false,
+                "response_type": "recommendations|conversation|help"
+            }}
+            """
+            
+            response = model.generate_content(prompt)
+            try:
+                result = json.loads(response.text)
+                print(f"   ✅ Text-only analysis successful: {result.get('search_strategy', 'unknown')}")
+                return result
+            except json.JSONDecodeError as e:
+                print(f"   ❌ Failed to parse text analysis: {e}")
+                return {
+                    "search_strategy": "text_only",
+                    "clip_search_terms": ["clothing", "fashion"],
+                    "user_intent": "casual",
+                    "style_analysis": "Text analysis failed",
+                    "confidence": "low",
+                    "should_search": True,
+                    "response_type": "recommendations"
+                }
+
+        # Analyze with images
         prompt = f"""
         You are an AI fashion stylist. Analyze the user's images and request to determine the best search strategy.
 
         USER REQUEST: "{user_prompt}"
         NUMBER OF IMAGES: {len(user_image_objects)}
 
-        In addition to previous fields, extract:
+        Determine if this request:
+        1. Asks for specific clothing recommendations based on the images
+        2. Asks for styling advice about the images
+        3. Is just a greeting or conversational
+        4. Asks about the system's capabilities
+
+        If it's a search request, extract:
         - "detected_gender": "male|female|unisex|other|unknown"
         - "skin_tone": "fair|medium|dark|olive|other|unknown"
         - "body_type": "slim|average|plus-size|athletic|petite|tall|other|unknown"
         - "age_group": "child|teen|adult|senior|unknown"
         - "season": "summer|winter|spring|autumn|all-season|unknown"
         - "occasion": "casual|formal|business|party|wedding|sports|vacation|other|unknown"
-        - "color_palette": ["red", "blue", ...]  # main colors detected
+        - "color_palette": ["red", "blue", ...]
         - "fashion_era": "modern|retro|vintage|y2k|other|unknown"
-        - "detected_patterns": ["stripes", "floral", ...]  # if visible
-        - "detected_materials": ["denim", "cotton", ...]  # if visible
-        - "detected_brands": ["Nike", "Adidas", ...]  # if visible
+        - "detected_patterns": ["stripes", "floral", ...]
+        - "detected_materials": ["denim", "cotton", ...]
+        - "detected_brands": ["Nike", "Adidas", ...]
 
-        Also, generate 3-5 CLIP search terms that combine these attributes, e.g.:
-        ["red floral dress for plus-size women", "Nike logo t-shirt for teens", "outfit for dark skin tone in summer"]
+        Generate 3-5 CLIP search terms that combine these attributes.
 
         Respond in this JSON:
         {{
-            "search_strategy": "similar|complementary|evaluation_only|trendy|formal|casual",
+            "search_strategy": "similar|complementary|evaluation_only|trendy|formal|casual|conversational",
             "clip_search_terms": ["term1", "term2", "term3"],
-            "user_intent": "casual|formal|trendy|evaluation|other",
+            "user_intent": "casual|formal|trendy|evaluation|conversation|help",
             "style_analysis": "Detailed analysis of the user's style",
             "confidence": "high|medium|low",
+            "should_search": true/false,
+            "response_type": "recommendations|conversation|help",
             "detected_gender": "male|female|unisex|other|unknown",
             "skin_tone": "fair|medium|dark|olive|other|unknown",
             "body_type": "slim|average|plus-size|athletic|petite|tall|other|unknown",
@@ -254,7 +310,9 @@ def analyze_user_intent_and_guide_search(user_images: List[str], user_prompt: st
                 "clip_search_terms": ["clothing", "fashion"],
                 "user_intent": "casual",
                 "style_analysis": "Analysis failed, using fallback",
-                "confidence": "low"
+                "confidence": "low",
+                "should_search": True,
+                "response_type": "recommendations"
             }
             
     except Exception as e:
@@ -267,7 +325,9 @@ def analyze_user_intent_and_guide_search(user_images: List[str], user_prompt: st
             "clip_search_terms": ["clothing"],
             "user_intent": "casual",
             "style_analysis": f"Error occurred: {str(e)}",
-            "confidence": "low"
+            "confidence": "low",
+            "should_search": True,
+            "response_type": "recommendations"
         }
 
 def search_by_text_query(search_term: str, top_k: int) -> List[Dict]:
@@ -508,6 +568,21 @@ def get_intelligent_recommendations(user_images: List[str], user_prompt: str, to
     
     # Step 1: LLM analyzes intent and guides search
     catalog_recommendations, llm_analysis = search_with_llm_guidance(user_images, user_prompt, top_k)
+    
+    # Check if this is a conversational request
+    if llm_analysis.get("should_search", True) == False:
+        print("🗣️ Conversational request detected - no search needed")
+        return [], llm_analysis, {
+            "analysis": {
+                "compatibility": "This is a conversational request. I'm here to help with fashion recommendations when you're ready!",
+                "catalog_feedback": "No catalog search needed for this type of request."
+            },
+            "styling_tips": [
+                "Feel free to ask me about specific clothing recommendations",
+                "Upload images to get personalized style suggestions",
+                "Ask for styling advice or fashion tips"
+            ]
+        }
     
     # Step 2: Enhanced analysis based on strategy
     if llm_analysis["search_strategy"] == "evaluation_only":

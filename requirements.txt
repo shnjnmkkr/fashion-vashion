@@ -1,9 +1,0 @@
-fastapi
-uvicorn
-pillow
-torch
-transformers
-faiss-cpu
-google-generativeai
-requests
-python-multipart
