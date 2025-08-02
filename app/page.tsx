@@ -168,6 +168,24 @@ export default function FashionVashion() {
       thinkingSteps: []
     }])
 
+    // Check if backend is available
+    if (!BACKEND_URL) {
+      // Replace thinking message with offline response
+      setChatMessages(prev => {
+        const newMessages = [...prev]
+        const lastMessage = newMessages[newMessages.length - 1]
+        if (lastMessage.type === 'thinking') {
+          newMessages[newMessages.length - 1] = {
+            type: 'bot',
+            message: `I'm currently offline. Please make sure the backend server is running on your local machine (localhost:8000) and you're connected to the internet.`,
+            recommendations: []
+          }
+        }
+        return newMessages
+      })
+      return
+    }
+
     // Call backend API immediately without fake steps
     try {
       const formData = new FormData()
@@ -220,7 +238,7 @@ export default function FashionVashion() {
         if (lastMessage.type === 'thinking') {
           newMessages[newMessages.length - 1] = {
             type: 'bot',
-            message: `I'm having trouble connecting to the AI backend. Please make sure the backend server is running on port 8000.`,
+            message: `I'm having trouble connecting to the AI backend. Please make sure the backend server is running on port 8000 and you're connected to the internet.`,
             recommendations: []
           }
         }
@@ -258,9 +276,30 @@ export default function FashionVashion() {
   }
 
   // Database interaction functions
-  const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+  const getBackendUrl = () => {
+    // Check if we're in development
+    if (process.env.NODE_ENV === 'development') {
+      return 'http://localhost:8000'
+    }
+    
+    // In production, try to use environment variable or fallback
+    const envBackendUrl = process.env.NEXT_PUBLIC_BACKEND_URL
+    if (envBackendUrl) {
+      return envBackendUrl
+    }
+    
+    // Fallback for when backend is not available
+    return null
+  }
+  
+  const BACKEND_URL = getBackendUrl()
   
   const createUser = async (email: string) => {
+    if (!BACKEND_URL) {
+      console.error('Backend URL not configured. Cannot create user.')
+      return null
+    }
+
     try {
       const formData = new FormData()
       formData.append('email', email)
@@ -285,6 +324,11 @@ export default function FashionVashion() {
   }
 
   const loadUser = async () => {
+    if (!BACKEND_URL) {
+      console.error('Backend URL not configured. Cannot load user.')
+      return null
+    }
+
     const savedUserId = localStorage.getItem('fashion_vashion_user_id')
     if (savedUserId) {
       setCurrentUser(savedUserId)
@@ -297,6 +341,11 @@ export default function FashionVashion() {
     if (!currentUser) {
       const userId = await createUser('user@example.com')
       if (!userId) return
+    }
+
+    if (!BACKEND_URL) {
+      console.error('Backend URL not configured. Cannot add to favorites.')
+      return
     }
 
     try {
@@ -319,6 +368,11 @@ export default function FashionVashion() {
   const removeFromFavorites = async (itemId: string) => {
     if (!currentUser) return
 
+    if (!BACKEND_URL) {
+      console.error('Backend URL not configured. Cannot remove from favorites.')
+      return
+    }
+
     try {
       const response = await fetch(`${BACKEND_URL}/api/users/${currentUser}/favorites/${itemId}`, {
         method: 'DELETE'
@@ -336,6 +390,11 @@ export default function FashionVashion() {
     if (!currentUser) {
       const userId = await createUser('user@example.com')
       if (!userId) return
+    }
+
+    if (!BACKEND_URL) {
+      console.error('Backend URL not configured. Cannot add to recommender.')
+      return
     }
 
     try {
@@ -358,6 +417,11 @@ export default function FashionVashion() {
   const removeFromRecommender = async (itemId: string) => {
     if (!currentUser) return
 
+    if (!BACKEND_URL) {
+      console.error('Backend URL not configured. Cannot remove from recommender.')
+      return
+    }
+
     try {
       const response = await fetch(`${BACKEND_URL}/api/users/${currentUser}/recommender-items/${itemId}`, {
         method: 'DELETE'
@@ -373,6 +437,11 @@ export default function FashionVashion() {
 
   const saveChatMessage = async (messageType: string, messageContent: string, recommendations?: any, llmAnalysis?: any, geminiAnalysis?: any) => {
     if (!currentUser) return
+
+    if (!BACKEND_URL) {
+      console.error('Backend URL not configured. Cannot save chat message.')
+      return
+    }
 
     try {
       const response = await fetch(`${BACKEND_URL}/api/users/${currentUser}/chat-history`, {

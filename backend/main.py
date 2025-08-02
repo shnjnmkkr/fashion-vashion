@@ -46,8 +46,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configuration
+# Dataset path - handle missing dataset gracefully
 DATASET_PATH = "../clothes_tryon_dataset"
+if not os.path.exists(DATASET_PATH):
+    print(f"⚠️ Dataset not found at {DATASET_PATH}")
+    print("📝 Running in deployment mode - dataset will be served from external storage")
+    DATASET_PATH = None
+else:
+    print(f"✅ Dataset found at {DATASET_PATH}")
+
+# Configuration
 CATALOG_PATH = os.path.join(DATASET_PATH, "train/cloth")
 USER_IMAGES_PATH = os.path.join(DATASET_PATH, "train/image")
 
@@ -518,13 +526,16 @@ async def startup_event():
     print("🚀 Starting Fashion-Vashion Backend...")
     
     # Check if dataset exists
-    if not os.path.exists(DATASET_PATH):
-        print(f"❌ Dataset directory not found: {DATASET_PATH}")
-        print("Please ensure the dataset is in the correct location.")
-        return
-    
-    print("✅ Dataset found!")
-    print(f"📁 Dataset path: {DATASET_PATH}")
+    if DATASET_PATH is None:
+        print("⚠️ Dataset not found, skipping dataset checks.")
+    else:
+        if not os.path.exists(DATASET_PATH):
+            print(f"❌ Dataset directory not found: {DATASET_PATH}")
+            print("Please ensure the dataset is in the correct location.")
+            return
+        
+        print("✅ Dataset found!")
+        print(f"📁 Dataset path: {DATASET_PATH}")
     
     # Create database tables
     try:
@@ -534,11 +545,14 @@ async def startup_event():
         print(f"❌ Error creating database tables: {e}")
     
     # Build FAISS index
-    try:
-        build_catalog_index()
-        print("✅ FAISS index built successfully!")
-    except Exception as e:
-        print(f"❌ Error building FAISS index: {e}")
+    if DATASET_PATH is not None:
+        try:
+            build_catalog_index()
+            print("✅ FAISS index built successfully!")
+        except Exception as e:
+            print(f"❌ Error building FAISS index: {e}")
+    else:
+        print("⚠️ Skipping FAISS index build due to missing dataset.")
     
     print("✅ Backend initialized successfully!")
 
@@ -574,6 +588,13 @@ async def get_recommendations(
             print("❌ FAISS index not built!")
             raise HTTPException(status_code=500, detail="Catalog index not initialized. Please restart the backend.")
         
+        if DATASET_PATH is None:
+            print("⚠️ Dataset not found, serving recommendations from external storage.")
+            # In deployment mode, we can't rely on catalog_files directly.
+            # We need to provide a placeholder or a way to fetch images.
+            # For now, we'll return an error or a placeholder.
+            raise HTTPException(status_code=503, detail="Dataset not available for catalog search.")
+
         if not catalog_files:
             print("❌ No catalog files available!")
             raise HTTPException(status_code=500, detail="No catalog files found. Please check the dataset path.")
@@ -681,6 +702,40 @@ async def get_catalog_image(filename: str):
             raise HTTPException(status_code=404, detail="Image not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error serving catalog image: {str(e)}")
+
+@app.get("/api/clothes/{filename}")
+async def serve_cloth_image(filename: str):
+    """Serve cloth images"""
+    try:
+        if DATASET_PATH is None:
+            # In deployment, serve from external storage or return placeholder
+            raise HTTPException(status_code=404, detail="Dataset not available in deployment")
+        
+        image_path = os.path.join(CATALOG_PATH, filename)
+        if not os.path.exists(image_path):
+            raise HTTPException(status_code=404, detail="Image not found")
+        
+        return FileResponse(image_path, media_type="image/jpeg")
+    except Exception as e:
+        print(f"Error serving cloth image: {e}")
+        raise HTTPException(status_code=500, detail="Error serving image")
+
+@app.get("/api/images/{filename}")
+async def serve_person_image(filename: str):
+    """Serve person images"""
+    try:
+        if DATASET_PATH is None:
+            # In deployment, serve from external storage or return placeholder
+            raise HTTPException(status_code=404, detail="Dataset not available in deployment")
+        
+        image_path = os.path.join(USER_IMAGES_PATH, filename)
+        if not os.path.exists(image_path):
+            raise HTTPException(status_code=404, detail="Image not found")
+        
+        return FileResponse(image_path, media_type="image/jpeg")
+    except Exception as e:
+        print(f"Error serving person image: {e}")
+        raise HTTPException(status_code=500, detail="Error serving image")
 
 # Database endpoints
 @app.post("/api/users")
